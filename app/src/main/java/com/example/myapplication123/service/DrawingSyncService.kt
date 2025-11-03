@@ -127,12 +127,13 @@ class DrawingSyncService {
             return
         }
         
-        scope.launch {
+        // Send immediately on IO dispatcher for faster transmission
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                Log.d("DrawingSync", "Sending path with ${path.points.size} points")
+                Log.d("DrawingSync", "Sending path: ${path.points.size} points, text: '${path.text}'")
                 outputStream?.writeObject(path)
                 outputStream?.flush()
-                Log.d("DrawingSync", "Path sent successfully: ${path.points.size} points")
+                Log.d("DrawingSync", "Path sent successfully")
             } catch (e: Exception) {
                 Log.e("DrawingSync", "Error sending path: ${e.message}", e)
                 _isConnected.value = false
@@ -174,8 +175,9 @@ class DrawingSyncService {
                             } else {
                                 // Add new path
                                 allPaths.add(it)
+                                // Update immediately - no delay
                                 _receivedPaths.value = allPaths.toList()
-                                Log.d("DrawingSync", "Total paths now: ${allPaths.size}")
+                                Log.d("DrawingSync", "Total paths now: ${allPaths.size}, text: ${it.text}")
                             }
                         }
                     } catch (e: java.io.EOFException) {
@@ -233,7 +235,8 @@ class DrawingSyncService {
 data class DrawingPathData(
     val points: List<PointData>,
     val color: String = "#000000",
-    val strokeWidth: Float = 5f
+    val strokeWidth: Float = 5f,
+    val text: String = "" // For text tool
 ) : java.io.Serializable
 
 data class PointData(

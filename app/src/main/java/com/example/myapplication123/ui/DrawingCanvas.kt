@@ -10,11 +10,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.abs
 
@@ -22,7 +24,8 @@ data class DrawingPath(
     val path: Path,
     val points: List<Offset> = emptyList(), // Store points for serialization
     val color: Color = Color.Black,
-    val strokeWidth: Float = 5f
+    val strokeWidth: Float = 5f,
+    val text: String = "" // For text tool - empty means it's a drawing path
 )
 
 @Composable
@@ -33,16 +36,26 @@ fun DrawingCanvas(
     onPathDrawn: (DrawingPath) -> Unit = {},
     onClear: () -> Unit = {}
 ) {
-    val drawingPaths = remember { mutableStateOf(paths.toMutableList()) }
+    // For student mode: use paths directly - NO STATE MANAGEMENT = NO DELAY
+    // For teacher mode: maintain local accumulating state
+    val localPaths = remember { mutableStateOf(mutableListOf<DrawingPath>()) }
     
-    // Sync external paths when they change
-    LaunchedEffect(paths) {
-        if (!isDrawable) {
-            // Student mode: always sync from external paths (from server)
-            drawingPaths.value = paths.toMutableList()
-        } else if (paths.isEmpty() && drawingPaths.value.isNotEmpty()) {
-            // Teacher mode: clear when external paths become empty
-            drawingPaths.value = mutableListOf()
+    // For student mode: use paths parameter directly - no state wrapper = instant updates
+    // For teacher mode: use local accumulating state
+    val pathsToDraw = if (!isDrawable) {
+        // Student mode: DIRECT USE - no remember, no delay
+        paths
+    } else {
+        // Teacher mode: local accumulating state
+        localPaths.value
+    }
+    
+    // Only sync for teacher mode - clear when explicitly cleared
+    if (isDrawable) {
+        LaunchedEffect(paths.isEmpty()) {
+            if (paths.isEmpty() && localPaths.value.isNotEmpty()) {
+                localPaths.value.clear()
+            }
         }
     }
 
@@ -96,9 +109,12 @@ fun DrawingCanvas(
                                 path = currentPath,
                                 points = currentPoints.toList(),
                                 color = Color.Black,
-                                strokeWidth = 5f
+                                strokeWidth = 5f,
+                                text = "" // Empty text means drawing path
                             )
-                            drawingPaths.value.add(newPath)
+                            if (isDrawable) {
+                                localPaths.value.add(newPath)
+                            }
                             onPathDrawn(newPath)
                         }
                     }
@@ -108,17 +124,21 @@ fun DrawingCanvas(
         // Draw white background first
         drawRect(Color.White)
         
-        // Draw all paths
-        drawingPaths.value.forEach { drawingPath ->
-            drawPath(
-                path = drawingPath.path,
-                color = drawingPath.color,
-                style = Stroke(
-                    width = drawingPath.strokeWidth,
-                    cap = StrokeCap.Round,
-                    join = StrokeJoin.Round
+        // Draw all paths (text is handled separately in overlay)
+        pathsToDraw.forEach { drawingPath ->
+            // Only draw paths, skip text (text is handled in overlay)
+            if (drawingPath.text.isEmpty() && !drawingPath.path.isEmpty) {
+                // Draw path
+                drawPath(
+                    path = drawingPath.path,
+                    color = drawingPath.color,
+                    style = Stroke(
+                        width = drawingPath.strokeWidth,
+                        cap = StrokeCap.Round,
+                        join = StrokeJoin.Round
+                    )
                 )
-            )
+            }
         }
     }
 }

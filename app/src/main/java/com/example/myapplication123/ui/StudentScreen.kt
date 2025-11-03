@@ -10,6 +10,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import com.example.myapplication123.service.DrawingPathData
 import com.example.myapplication123.service.DrawingSyncService
 
@@ -21,17 +27,42 @@ fun StudentScreen(
     val receivedPaths by syncService.receivedPaths.collectAsState()
     val isConnected by syncService.isConnected.collectAsState()
     
-    // Convert received paths to DrawingPath objects - update reactively when receivedPaths changes
-    val paths = derivedStateOf {
+    // Convert received paths - update immediately when receivedPaths changes
+    // Use size and last item to detect changes properly
+    val pathsSize = receivedPaths.size
+    val lastPathText = receivedPaths.lastOrNull()?.text ?: ""
+    
+    val paths = remember(pathsSize, lastPathText) {
+        android.util.Log.d("StudentScreen", "Converting ${receivedPaths.size} paths, last text: '$lastPathText', all texts: ${receivedPaths.map { "'${it.text}'" }}")
         receivedPaths.map { pathData ->
-            DrawingPath(
-                path = convertToPath(pathData),
-                points = pathData.points.map { p -> Offset(p.x, p.y) },
-                color = Color(android.graphics.Color.parseColor(pathData.color)),
-                strokeWidth = pathData.strokeWidth
-            )
+            try {
+                DrawingPath(
+                    path = convertToPath(pathData),
+                    points = pathData.points.map { p -> Offset(p.x, p.y) },
+                    color = Color(android.graphics.Color.parseColor(pathData.color)),
+                    strokeWidth = pathData.strokeWidth,
+                    text = pathData.text ?: "" // Support text from server
+                )
+            } catch (e: Exception) {
+                android.util.Log.w("StudentScreen", "Error converting path: ${e.message}")
+                DrawingPath(
+                    path = Path(),
+                    points = emptyList(),
+                    color = Color.Black,
+                    strokeWidth = 5f,
+                    text = ""
+                )
+            }
         }
-    }.value
+    }
+    
+    // Debug: Log text paths
+    LaunchedEffect(paths.size) {
+        val textPaths = paths.filter { it.text.isNotEmpty() }
+        if (textPaths.isNotEmpty()) {
+            android.util.Log.d("StudentScreen", "Found ${textPaths.size} text paths: ${textPaths.map { "'${it.text}' at ${it.points.firstOrNull()}" }}")
+        }
+    }
     
     LaunchedEffect(Unit) {
         syncService.initialize()
@@ -64,14 +95,39 @@ fun StudentScreen(
             }
         }
         
-        // Drawing canvas (read-only)
-        DrawingCanvas(
-            modifier = Modifier
-                .fillMaxSize()
-                .weight(1f),
-            isDrawable = false,
-            paths = paths
-        )
+        // Drawing canvas (read-only) with text overlay
+        BoxWithConstraints(modifier = Modifier.weight(1f)) {
+            val density = LocalDensity.current
+            
+            DrawingCanvas(
+                modifier = Modifier.fillMaxSize(),
+                isDrawable = false,
+                paths = paths
+            )
+            
+            // Draw text overlays on top - use absolute positioning
+            paths.forEachIndexed { index, drawingPath ->
+                if (drawingPath.text.isNotEmpty()) {
+                    drawingPath.points.firstOrNull()?.let { pos ->
+                        // Convert canvas coordinates (pixels) to dp
+                        val xDp = (pos.x / density.density).dp
+                        val yDp = (pos.y / density.density).dp
+                        
+                        android.util.Log.d("StudentScreen", "Drawing text '${drawingPath.text}' at ($xDp, $yDp), color: ${drawingPath.color}")
+                        
+                        Text(
+                            text = drawingPath.text,
+                            style = TextStyle(
+                                fontSize = (drawingPath.strokeWidth * 1.2).sp,
+                                fontWeight = FontWeight.Bold,
+                                color = drawingPath.color
+                            ),
+                            modifier = Modifier.offset(x = xDp, y = yDp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
