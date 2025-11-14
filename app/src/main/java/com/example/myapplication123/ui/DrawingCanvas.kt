@@ -34,7 +34,8 @@ fun DrawingCanvas(
     isDrawable: Boolean = true,
     paths: List<DrawingPath> = emptyList(),
     onPathDrawn: (DrawingPath) -> Unit = {},
-    onClear: () -> Unit = {}
+    onClear: () -> Unit = {},
+    drawBackground: Boolean = true
 ) {
     // For student mode: use paths directly - NO STATE MANAGEMENT = NO DELAY
     // For teacher mode: maintain local accumulating state
@@ -62,7 +63,7 @@ fun DrawingCanvas(
     Canvas(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.White)
+            .then(if (drawBackground) Modifier.background(Color.White) else Modifier)
             .pointerInput(isDrawable) {
                 if (!isDrawable) return@pointerInput
 
@@ -113,16 +114,21 @@ fun DrawingCanvas(
                                 text = "" // Empty text means drawing path
                             )
                             if (isDrawable) {
+                                // Add to local paths for immediate display
                                 localPaths.value.add(newPath)
                             }
+                            // Notify parent - this will send to student
+                            // Don't add to parent's paths here to avoid duplication
                             onPathDrawn(newPath)
                         }
                     }
                 )
             }
     ) {
-        // Draw white background first
-        drawRect(Color.White)
+        // Draw white background first (if enabled)
+        if (drawBackground) {
+            drawRect(Color.White)
+        }
         
         // Draw all paths (text is handled separately in overlay)
         pathsToDraw.forEach { drawingPath ->

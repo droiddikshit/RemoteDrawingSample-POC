@@ -1,5 +1,13 @@
 package com.example.myapplication123.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.media.projection.MediaProjectionManager
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -9,23 +17,64 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import com.example.myapplication123.service.DrawingPathData
 import com.example.myapplication123.service.DrawingSyncService
+import com.example.myapplication123.service.FloatingDrawingOverlayService
+import com.example.myapplication123.service.ScreenSharingService
 
 @Composable
 fun StudentScreen(
     syncService: DrawingSyncService,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+    val screenWidth = with(density) { configuration.screenWidthDp.dp.toPx() }
+    val screenHeight = with(density) { configuration.screenHeightDp.dp.toPx() }
+    
     val receivedPaths by syncService.receivedPaths.collectAsState()
     val isConnected by syncService.isConnected.collectAsState()
+    
+    var hasOverlayPermission by remember { mutableStateOf(checkOverlayPermission(context)) }
+    var screenSharingStarted by remember { mutableStateOf(false) }
+    
+    // Screen sharing launcher
+    val screenShareLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val intent = Intent(context, ScreenSharingService::class.java).apply {
+                putExtra(ScreenSharingService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(ScreenSharingService.EXTRA_RESULT_DATA, result.data)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+            screenSharingStarted = true
+        }
+    }
+    
+    // Overlay permission launcher
+    val overlayPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        hasOverlayPermission = checkOverlayPermission(context)
+        if (hasOverlayPermission) {
+            startOverlayService(context, null)
+        }
+    }
     
     // Convert received paths - update immediately when receivedPaths changes
     // Use size and last item to detect changes properly
@@ -56,16 +105,83 @@ fun StudentScreen(
         }
     }
     
-    // Debug: Log text paths
-    LaunchedEffect(paths.size) {
-        val textPaths = paths.filter { it.text.isNotEmpty() }
-        if (textPaths.isNotEmpty()) {
-            android.util.Log.d("StudentScreen", "Found ${textPaths.size} text paths: ${textPaths.map { "'${it.text}' at ${it.points.firstOrNull()}" }}")
+    // Update overlay with received paths - send to overlay service
+    LaunchedEffect(receivedPaths) {
+        if (hasOverlayPermission && isConnected) {
+            val intent = Intent(context, FloatingDrawingOverlayService::class.java)
+            if (receivedPaths.isNotEmpty()) {
+                intent.action = "UPDATE_PATHS"
+                intent.putExtra("paths", ArrayList(receivedPaths))
+            } else {
+                intent.action = "CLEAR_PATHS"
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+    }
+    
+    // Setup screen sharing callback - do this early, before starting screen sharing
+    LaunchedEffect(Unit) {
+        ScreenSharingService.setFrameCallback { frameData ->
+            android.util.Log.d("StudentScreen", "Screen frame callback received: ${frameData.size} bytes")
+            if (isConnected) {
+                syncService.sendScreenFrame(frameData)
+            } else {
+                android.util.Log.w("StudentScreen", "Not connected, dropping frame")
+            }
+        }
+    }
+    
+    // Start screen sharing when connected
+    LaunchedEffect(isConnected) {
+        if (isConnected && !screenSharingStarted) {
+            android.util.Log.d("StudentScreen", "Connected, starting screen sharing setup")
+            // Send screen dimensions to teacher
+            syncService.setScreenDimensions(screenWidth, screenHeight, screenWidth, screenHeight)
+            
+            // Ensure callback is set before requesting screen sharing
+            ScreenSharingService.setFrameCallback { frameData ->
+                android.util.Log.d("StudentScreen", "Screen frame callback: ${frameData.size} bytes")
+                if (isConnected) {
+                    syncService.sendScreenFrame(frameData)
+                }
+            }
+            
+            // Request screen sharing
+            val mediaProjectionManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            screenShareLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+            
+            // Start overlay service
+            if (hasOverlayPermission) {
+                startOverlayService(context, null)
+            } else {
+                // Request overlay permission
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    overlayPermissionLauncher.launch(
+                        Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                            data = android.net.Uri.parse("package:${context.packageName}")
+                        }
+                    )
+                }
+            }
         }
     }
     
     LaunchedEffect(Unit) {
         syncService.initialize()
+    }
+    
+    // Cleanup on disconnect
+    LaunchedEffect(isConnected) {
+        if (!isConnected) {
+            // Stop services
+            context.stopService(Intent(context, ScreenSharingService::class.java))
+            context.stopService(Intent(context, FloatingDrawingOverlayService::class.java))
+            screenSharingStarted = false
+        }
     }
     
     Column(modifier = modifier.fillMaxSize()) {
@@ -82,16 +198,25 @@ fun StudentScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Student Mode - Watching",
-                    style = MaterialTheme.typography.titleLarge
-                )
-                Text(
-                    text = if (isConnected) "✓ Connected" else "Waiting...",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (isConnected) MaterialTheme.colorScheme.primary 
-                           else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column {
+                    Text(
+                        text = "Student Mode - Screen Sharing",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Text(
+                        text = if (isConnected) "✓ Connected & Sharing" else "Waiting...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isConnected) MaterialTheme.colorScheme.primary 
+                               else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (!hasOverlayPermission && isConnected) {
+                        Text(
+                            text = "⚠ Overlay permission needed",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
             }
         }
         
@@ -159,5 +284,22 @@ private fun convertToPath(pathData: DrawingPathData): Path {
         }
     }
     return path
+}
+
+private fun checkOverlayPermission(context: Context): Boolean {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        Settings.canDrawOverlays(context)
+    } else {
+        true
+    }
+}
+
+private fun startOverlayService(context: Context, existingService: FloatingDrawingOverlayService?) {
+    val intent = Intent(context, FloatingDrawingOverlayService::class.java)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        context.startForegroundService(intent)
+    } else {
+        context.startService(intent)
+    }
 }
 

@@ -31,7 +31,16 @@ class DrawingSyncService {
     private val _receivedPaths = MutableStateFlow<List<DrawingPathData>>(emptyList())
     val receivedPaths: StateFlow<List<DrawingPathData>> = _receivedPaths.asStateFlow()
     
+    private val _receivedScreenFrame = MutableStateFlow<ByteArray?>(null)
+    val receivedScreenFrame: StateFlow<ByteArray?> = _receivedScreenFrame.asStateFlow()
+    
     private val allPaths = mutableListOf<DrawingPathData>()
+    
+    // Screen dimensions for coordinate transformation
+    private var studentScreenWidth = 1080f
+    private var studentScreenHeight = 1920f
+    private var teacherScreenWidth = 1080f
+    private var teacherScreenHeight = 1920f
     
     fun initialize() {
         // Socket initialization will happen when WiFi Direct connects
@@ -76,48 +85,125 @@ class DrawingSyncService {
                 _connectionStatusMessage.value = "Connecting to $host:$port..."
                 
                 // Close existing connection if any
-                clientSocket?.close()
+                try {
+                    clientSocket?.close()
+                } catch (e: Exception) {
+                    // Ignore
+                }
                 
                 // Create socket with timeout
                 clientSocket = Socket()
+                clientSocket!!.soTimeout = 0 // No read timeout
+                clientSocket!!.tcpNoDelay = true // Disable Nagle's algorithm
                 clientSocket!!.connect(
                     java.net.InetSocketAddress(host, port),
-                    5000 // 5 second timeout
+                    10000 // 10 second timeout
                 )
                 
-                Log.d("DrawingSync", "Connected to server at $host:$port")
+                // Verify socket is connected and open
+                if (clientSocket!!.isClosed || !clientSocket!!.isConnected) {
+                    throw java.net.SocketException("Socket not properly connected")
+                }
+                
+                Log.d("DrawingSync", "Connected to server at $host:$port, socket open: ${!clientSocket!!.isClosed}")
                 _connectionStatusMessage.value = "Connected successfully!"
                 setupConnection(clientSocket!!)
-                startReceiving()
+                
+                // Only start receiving if connection was successful
+                if (_isConnected.value) {
+                    startReceiving()
+                }
             } catch (e: java.net.ConnectException) {
                 Log.e("DrawingSync", "Connection refused: ${e.message}")
                 _connectionStatusMessage.value = "Connection Refused!\n\nTroubleshooting:\n✓ Check IP: $host\n✓ Check Port: $port\n✓ Make sure Teacher started server\n✓ Both devices on same WiFi\n✓ Try teacher's WiFi IP from settings"
                 _isConnected.value = false
+                try {
+                    clientSocket?.close()
+                } catch (closeEx: Exception) {
+                    // Ignore
+                }
             } catch (e: java.net.SocketTimeoutException) {
                 Log.e("DrawingSync", "Connection timeout: ${e.message}")
                 _connectionStatusMessage.value = "⏱️ Connection Timeout!\n\nServer not responding.\n\nCheck:\n✓ IP: $host (exactly as shown)\n✓ Port: $port\n✓ Teacher server is running\n✓ Firewall allows port $port\n✓ If teacher on emulator, check computer firewall\n✓ Try different port (8080, 9999)"
                 _isConnected.value = false
+                try {
+                    clientSocket?.close()
+                } catch (closeEx: Exception) {
+                    // Ignore
+                }
+            } catch (e: java.net.SocketException) {
+                Log.e("DrawingSync", "Socket error: ${e.message}", e)
+                _connectionStatusMessage.value = "Socket Error: ${e.message}\n\nTroubleshooting:\n✓ IP: $host, Port: $port\n✓ Server must be running\n✓ Same WiFi network required\n✓ Try restarting both apps"
+                _isConnected.value = false
+                try {
+                    clientSocket?.close()
+                } catch (closeEx: Exception) {
+                    // Ignore
+                }
             } catch (e: Exception) {
                 Log.e("DrawingSync", "Connection error: ${e.message}", e)
                 _connectionStatusMessage.value = "Connection Failed: ${e.javaClass.simpleName}\n${e.message}\n\nTroubleshooting:\n✓ IP: $host, Port: $port\n✓ Server must be running\n✓ Same WiFi network required"
                 _isConnected.value = false
+                try {
+                    clientSocket?.close()
+                } catch (closeEx: Exception) {
+                    // Ignore
+                }
             }
         }
     }
     
     private fun setupConnection(socket: Socket) {
         try {
+            // Check if socket is still open
+            if (socket.isClosed) {
+                Log.e("DrawingSync", "Socket is already closed")
+                _connectionStatusMessage.value = "Stream setup failed: Socket closed"
+                _isConnected.value = false
+                return
+            }
+            
             socket.soTimeout = 0 // No timeout on read
+            socket.tcpNoDelay = true // Disable Nagle's algorithm for lower latency
+            
+            // Create output stream first and flush to send header
+            // This sends the ObjectOutputStream header to the other side
             outputStream = ObjectOutputStream(socket.getOutputStream())
             outputStream!!.flush()
+            
+            // Check socket is still open before creating input stream
+            if (socket.isClosed) {
+                Log.e("DrawingSync", "Socket closed before creating input stream")
+                _connectionStatusMessage.value = "Stream setup failed: Socket closed"
+                _isConnected.value = false
+                return
+            }
+            
+            // Create input stream (this will wait for the header from the other side)
+            // ObjectInputStream constructor blocks until it receives the header
             inputStream = ObjectInputStream(socket.getInputStream())
+            
             _isConnected.value = true
             _connectionStatusMessage.value = "Connection established!"
             Log.d("DrawingSync", "Streams initialized successfully")
+        } catch (e: java.net.SocketException) {
+            Log.e("DrawingSync", "Stream setup error: Socket closed or error - ${e.message}", e)
+            _connectionStatusMessage.value = "Stream setup failed: ${e.message}"
+            _isConnected.value = false
+            try {
+                socket.close()
+            } catch (closeEx: Exception) {
+                // Ignore
+            }
         } catch (e: Exception) {
             Log.e("DrawingSync", "Stream setup error: ${e.message}", e)
             _connectionStatusMessage.value = "Stream setup failed: ${e.message}"
             _isConnected.value = false
+            try {
+                socket.close()
+            } catch (closeEx: Exception) {
+                // Ignore
+            }
         }
     }
     
@@ -127,11 +213,14 @@ class DrawingSyncService {
             return
         }
         
+        // Transform coordinates from teacher screen to student screen
+        val transformedPath = transformCoordinatesToStudent(path)
+        
         // Send immediately on IO dispatcher for faster transmission
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                Log.d("DrawingSync", "Sending path: ${path.points.size} points, text: '${path.text}'")
-                outputStream?.writeObject(path)
+                Log.d("DrawingSync", "Sending path: ${transformedPath.points.size} points, text: '${transformedPath.text}'")
+                outputStream?.writeObject(transformedPath)
                 outputStream?.flush()
                 Log.d("DrawingSync", "Path sent successfully")
             } catch (e: Exception) {
@@ -139,6 +228,43 @@ class DrawingSyncService {
                 _isConnected.value = false
             }
         }
+    }
+    
+    fun sendScreenFrame(frameData: ByteArray) {
+        if (!_isConnected.value) return
+        
+        scope.launch(Dispatchers.IO) {
+            try {
+                val screenData = ScreenFrameData(frameData)
+                outputStream?.writeObject(screenData)
+                outputStream?.flush()
+            } catch (e: Exception) {
+                Log.e("DrawingSync", "Error sending screen frame: ${e.message}", e)
+            }
+        }
+    }
+    
+    fun setScreenDimensions(studentWidth: Float, studentHeight: Float, teacherWidth: Float, teacherHeight: Float) {
+        studentScreenWidth = studentWidth
+        studentScreenHeight = studentHeight
+        teacherScreenWidth = teacherWidth
+        teacherScreenHeight = teacherHeight
+        Log.d("DrawingSync", "Screen dimensions set - Student: ${studentWidth}x${studentHeight}, Teacher: ${teacherWidth}x${teacherHeight}")
+    }
+    
+    private fun transformCoordinatesToStudent(path: DrawingPathData): DrawingPathData {
+        if (studentScreenWidth == 0f || studentScreenHeight == 0f || teacherScreenWidth == 0f || teacherScreenHeight == 0f) {
+            return path // No transformation if dimensions not set
+        }
+        
+        val scaleX = studentScreenWidth / teacherScreenWidth
+        val scaleY = studentScreenHeight / teacherScreenHeight
+        
+        val transformedPoints = path.points.map { point ->
+            PointData(point.x * scaleX, point.y * scaleY)
+        }
+        
+        return path.copy(points = transformedPoints)
     }
     
     fun clearCanvas() {
@@ -164,20 +290,29 @@ class DrawingSyncService {
                 Log.d("DrawingSync", "Starting to receive drawings...")
                 while (_isConnected.value && inputStream != null) {
                     try {
-                        val path = inputStream!!.readObject() as? DrawingPathData
-                        path?.let {
-                            Log.d("DrawingSync", "Received path with ${it.points.size} points, color: ${it.color}")
-                            if (it.color == "#CLEAR") {
-                                // Clear command
-                                Log.d("DrawingSync", "Received clear command")
-                                allPaths.clear()
-                                _receivedPaths.value = emptyList()
-                            } else {
-                                // Add new path
-                                allPaths.add(it)
-                                // Update immediately - no delay
-                                _receivedPaths.value = allPaths.toList()
-                                Log.d("DrawingSync", "Total paths now: ${allPaths.size}, text: ${it.text}")
+                        val obj = inputStream!!.readObject()
+                        
+                        when (obj) {
+                            is DrawingPathData -> {
+                                val path = obj
+                                Log.d("DrawingSync", "Received path with ${path.points.size} points, color: ${path.color}")
+                                if (path.color == "#CLEAR") {
+                                    // Clear command
+                                    Log.d("DrawingSync", "Received clear command")
+                                    allPaths.clear()
+                                    _receivedPaths.value = emptyList()
+                                } else {
+                                    // Add new path
+                                    allPaths.add(path)
+                                    // Update immediately - no delay
+                                    _receivedPaths.value = allPaths.toList()
+                                    Log.d("DrawingSync", "Total paths now: ${allPaths.size}, text: ${path.text}")
+                                }
+                            }
+                            is ScreenFrameData -> {
+                                // Received screen frame from student
+                                Log.d("DrawingSync", "Received screen frame: ${obj.frameData.size} bytes")
+                                _receivedScreenFrame.value = obj.frameData
                             }
                         }
                     } catch (e: java.io.EOFException) {
@@ -243,3 +378,18 @@ data class PointData(
     val x: Float,
     val y: Float
 ) : java.io.Serializable
+
+data class ScreenFrameData(
+    val frameData: ByteArray
+) : java.io.Serializable {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as ScreenFrameData
+        return frameData.contentEquals(other.frameData)
+    }
+    
+    override fun hashCode(): Int {
+        return frameData.contentHashCode()
+    }
+}
