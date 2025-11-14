@@ -115,11 +115,9 @@ fun StudentScreen(
             } else {
                 intent.action = "CLEAR_PATHS"
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            // Use startService instead of startForegroundService for updates
+            // The service is already running as foreground service
+            context.startService(intent)
         }
     }
     
@@ -296,8 +294,16 @@ private fun checkOverlayPermission(context: Context): Boolean {
 
 private fun startOverlayService(context: Context, existingService: FloatingDrawingOverlayService?) {
     val intent = Intent(context, FloatingDrawingOverlayService::class.java)
+    // Always use startForegroundService for Android 8+ to ensure proper foreground service handling
+    // The service will call startForeground() in onCreate() immediately
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        context.startForegroundService(intent)
+        try {
+            context.startForegroundService(intent)
+        } catch (e: IllegalStateException) {
+            // If service is already running, just start it normally
+            android.util.Log.w("StudentScreen", "Service already running, using startService: ${e.message}")
+            context.startService(intent)
+        }
     } else {
         context.startService(intent)
     }

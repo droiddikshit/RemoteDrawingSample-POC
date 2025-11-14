@@ -6,8 +6,10 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -38,26 +40,14 @@ fun DrawingCanvas(
     drawBackground: Boolean = true
 ) {
     // For student mode: use paths directly - NO STATE MANAGEMENT = NO DELAY
-    // For teacher mode: maintain local accumulating state
-    val localPaths = remember { mutableStateOf(mutableListOf<DrawingPath>()) }
-    
-    // For student mode: use paths parameter directly - no state wrapper = instant updates
-    // For teacher mode: use local accumulating state
+    // For teacher mode: don't render paths locally - teacher sees drawing on student's screen via screen share
     val pathsToDraw = if (!isDrawable) {
         // Student mode: DIRECT USE - no remember, no delay
         paths
     } else {
-        // Teacher mode: local accumulating state
-        localPaths.value
-    }
-    
-    // Only sync for teacher mode - clear when explicitly cleared
-    if (isDrawable) {
-        LaunchedEffect(paths.isEmpty()) {
-            if (paths.isEmpty() && localPaths.value.isNotEmpty()) {
-                localPaths.value.clear()
-            }
-        }
+        // Teacher mode: don't show paths locally - empty list
+        // Teacher will see drawings on student's screen through screen sharing
+        emptyList()
     }
 
     Canvas(
@@ -113,12 +103,8 @@ fun DrawingCanvas(
                                 strokeWidth = 5f,
                                 text = "" // Empty text means drawing path
                             )
-                            if (isDrawable) {
-                                // Add to local paths for immediate display
-                                localPaths.value.add(newPath)
-                            }
-                            // Notify parent - this will send to student
-                            // Don't add to parent's paths here to avoid duplication
+                            // Don't add to local paths in teacher mode - teacher sees drawing on student's screen via screen share
+                            // Just notify parent to send to student
                             onPathDrawn(newPath)
                         }
                     }

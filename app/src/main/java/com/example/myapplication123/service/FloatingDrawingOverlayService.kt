@@ -30,16 +30,22 @@ class FloatingDrawingOverlayService : Service() {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         createNotificationChannel()
         
-        // For Android 14+, we can't use foreground service without a type
-        // Since overlay doesn't need special permissions, we'll use a regular notification
-        // The overlay will still work without being a foreground service
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            // Android 14+ - just show notification, don't use foreground service
+        // Always call startForeground immediately when service is created
+        // This is required when using startForegroundService()
+        // For Android 14+, we'll handle the error gracefully if permission is missing
+        try {
+            startForeground(NOTIFICATION_ID, createNotification())
+        } catch (e: SecurityException) {
+            // Android 14+ might throw SecurityException if we don't have the right foreground service type
+            // In that case, just show a regular notification
+            Log.w("FloatingOverlay", "Could not start foreground service: ${e.message}")
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.notify(NOTIFICATION_ID, createNotification())
-        } else {
-            // Android 13 and below - can use foreground service without type
-            startForeground(NOTIFICATION_ID, createNotification())
+        } catch (e: Exception) {
+            Log.e("FloatingOverlay", "Error starting foreground: ${e.message}", e)
+            // Fallback to regular notification
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            notificationManager.notify(NOTIFICATION_ID, createNotification())
         }
     }
     

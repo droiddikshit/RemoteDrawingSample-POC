@@ -3,6 +3,7 @@ package com.example.myapplication123.ui
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -22,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import com.example.myapplication123.service.DrawingPathData
 import com.example.myapplication123.service.DrawingSyncService
 import com.example.myapplication123.service.PointData
+import kotlin.math.abs
 
 @Composable
 fun TeacherScreen(
@@ -82,68 +85,66 @@ fun TeacherScreen(
     }
     
     Column(modifier = modifier.fillMaxSize()) {
-        // Top bar with clear button and text button
+        // Minimal top bar - only 5% of screen
         Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shadowElevation = 4.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = with(LocalDensity.current) { (LocalConfiguration.current.screenHeightDp * 0.05f).dp }),
+            shadowElevation = 2.dp,
             color = MaterialTheme.colorScheme.primaryContainer
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(
-                        text = "Teacher Mode - Viewing Student Screen",
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                    Text(
-                        text = if (isConnected) {
-                            if (studentScreenBitmap != null) "✓ Connected & Viewing" else "✓ Connected - Waiting for screen..."
-                        } else {
-                            "Not connected"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (isConnected) MaterialTheme.colorScheme.primary 
-                               else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Text(
+                    text = if (isConnected) {
+                        if (studentScreenBitmap != null) "✓ Viewing" else "Waiting..."
+                    } else {
+                        "Not connected"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isConnected) MaterialTheme.colorScheme.primary 
+                           else MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Button(
                         onClick = {
                             showTextDialog = true
                         },
                         enabled = isConnected,
+                        modifier = Modifier.height(32.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.secondary
                         )
                     ) {
-                        Text("Add Text")
+                        Text("Text", style = MaterialTheme.typography.bodySmall)
                     }
                     Button(
                         onClick = {
                             textPaths = emptyList()
                             syncService.clearCanvas()
-                            // Trigger DrawingCanvas clear by updating clearTrigger
-                            // The LaunchedEffect in DrawingCanvas will detect empty paths and clear localPaths
                         },
+                        modifier = Modifier.height(32.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.error
                         ),
                         enabled = isConnected
                     ) {
-                        Text("Clear")
+                        Text("Clear", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
         }
         
-        // Student screen view with drawing overlay
+        // Student screen view - takes 95% of screen
         BoxWithConstraints(modifier = Modifier.weight(1f)) {
             val density = LocalDensity.current
             val boxWidth = constraints.maxWidth.toFloat()
@@ -187,46 +188,86 @@ fun TeacherScreen(
                 }
             }
             
-            // Drawing overlay on top of student screen (transparent background)
-            // Note: DrawingCanvas maintains its own localPaths in teacher mode, so we don't need to track paths here
-            DrawingCanvas(
-                modifier = Modifier.fillMaxSize(),
-                isDrawable = true,
-                paths = emptyList(), // Don't pass paths - DrawingCanvas manages its own in teacher mode
-                drawBackground = false,
-                onPathDrawn = { newPath ->
-                    // Don't add to paths - DrawingCanvas already rendered it locally
-                    // Just send to student
-                    // Transform coordinates from teacher view to student screen coordinates
-                    val scaleX = if (studentScreenWidth > 0) boxWidth / studentScreenWidth else 1f
-                    val scaleY = if (studentScreenHeight > 0) boxHeight / studentScreenHeight else 1f
-                    val scale = minOf(scaleX, scaleY)
-                    
-                    // Convert coordinates back to student screen space
-                    val transformedPoints = newPath.points.map { offset ->
-                        // Account for centering if screen is smaller than view
-                        val offsetX = (boxWidth - studentScreenWidth * scale) / 2
-                        val offsetY = (boxHeight - studentScreenHeight * scale) / 2
-                        val studentX = (offset.x - offsetX) / scale
-                        val studentY = (offset.y - offsetY) / scale
-                        PointData(studentX, studentY)
+            // Invisible touch overlay - captures touches but doesn't render anything
+            // Teacher sees drawings only on student's screen via screen sharing
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(isConnected) {
+                        if (!isConnected) return@pointerInput
+
+                        var currentPath = androidx.compose.ui.graphics.Path()
+                        var currentPoints = mutableListOf<Offset>()
+                        var lastOffset: Offset? = null
+
+                        detectDragGestures(
+                            onDragStart = { offset: Offset ->
+                                currentPath = androidx.compose.ui.graphics.Path()
+                                currentPoints = mutableListOf()
+                                currentPath.moveTo(offset.x, offset.y)
+                                currentPoints.add(offset)
+                                lastOffset = offset
+                            },
+                            onDrag = { change: androidx.compose.ui.input.pointer.PointerInputChange, dragAmount: Offset ->
+                                val currentOffset = change.position
+                                lastOffset?.let { last ->
+                                    val distance = abs(currentOffset.x - last.x) + abs(currentOffset.y - last.y)
+                                    if (distance > 2) {
+                                        val midX = (currentOffset.x + last.x) / 2
+                                        val midY = (currentOffset.y + last.y) / 2
+                                        // Use quadraticBezierTo for Compose Path
+                                        currentPath.quadraticBezierTo(
+                                            last.x, last.y,
+                                            midX, midY
+                                        )
+                                        currentPoints.add(Offset(midX, midY))
+                                        currentPoints.add(currentOffset)
+                                        lastOffset = currentOffset
+                                    }
+                                }
+                            },
+                            onDragEnd = {
+                                lastOffset?.let {
+                                    currentPath.lineTo(it.x, it.y)
+                                    if (currentPoints.isEmpty() || currentPoints.last() != it) {
+                                        currentPoints.add(it)
+                                    }
+                                }
+                                if (currentPoints.isNotEmpty()) {
+                                    val newPath = DrawingPath(
+                                        path = currentPath,
+                                        points = currentPoints.toList(),
+                                        color = androidx.compose.ui.graphics.Color.Black,
+                                        strokeWidth = 5f,
+                                        text = ""
+                                    )
+                                    // Transform and send to student - don't render locally
+                                    val scaleX = if (studentScreenWidth > 0) boxWidth / studentScreenWidth else 1f
+                                    val scaleY = if (studentScreenHeight > 0) boxHeight / studentScreenHeight else 1f
+                                    val scale = minOf(scaleX, scaleY)
+                                    
+                                    val transformedPoints = newPath.points.map { offset ->
+                                        val offsetX = (boxWidth - studentScreenWidth * scale) / 2
+                                        val offsetY = (boxHeight - studentScreenHeight * scale) / 2
+                                        val studentX = (offset.x - offsetX) / scale
+                                        val studentY = (offset.y - offsetY) / scale
+                                        PointData(studentX, studentY)
+                                    }
+                                    
+                                    val pathData = DrawingPathData(
+                                        points = transformedPoints,
+                                        color = "#000000",
+                                        strokeWidth = newPath.strokeWidth,
+                                        text = newPath.text
+                                    )
+                                    syncService.sendDrawingPath(pathData)
+                                }
+                            }
+                        )
                     }
-                    
-                    val pathData = DrawingPathData(
-                        points = transformedPoints,
-                        color = "#000000",
-                        strokeWidth = newPath.strokeWidth,
-                        text = newPath.text
-                    )
-                    // Send immediately - coordinates will be transformed in DrawingSyncService
-                    syncService.sendDrawingPath(pathData)
-                },
-                onClear = {
-                    textPaths = emptyList()
-                }
             )
             
-            // Draw text overlays on top
+            // Draw text overlays on top (if needed in future)
             textPaths.forEachIndexed { index, drawingPath ->
                 if (drawingPath.text.isNotEmpty()) {
                     drawingPath.points.firstOrNull()?.let { pos ->
