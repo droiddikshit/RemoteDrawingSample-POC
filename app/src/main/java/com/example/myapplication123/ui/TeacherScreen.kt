@@ -6,9 +6,13 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.geometry.Offset
@@ -31,8 +35,8 @@ fun TeacherScreen(
     syncService: DrawingSyncService,
     modifier: Modifier = Modifier
 ) {
-    // Only track text paths - drawing paths are managed by DrawingCanvas locally
-    var textPaths by remember { mutableStateOf<List<DrawingPath>>(emptyList()) }
+    // NO local state for paths - teacher only sends, never renders locally
+    // Teacher sees drawings only on student's screen via screen sharing
     val isConnected by syncService.isConnected.collectAsState()
     val receivedScreenFrame by syncService.receivedScreenFrame.collectAsState()
     // Don't receive drawing paths on teacher - teacher only sends, doesn't receive drawings
@@ -84,68 +88,9 @@ fun TeacherScreen(
         // This is just a fallback for Network Mode where server might not be started yet
     }
     
-    Column(modifier = modifier.fillMaxSize()) {
-        // Minimal top bar - only 5% of screen
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = with(LocalDensity.current) { (LocalConfiguration.current.screenHeightDp * 0.05f).dp }),
-            shadowElevation = 2.dp,
-            color = MaterialTheme.colorScheme.primaryContainer
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = if (isConnected) {
-                        if (studentScreenBitmap != null) "✓ Viewing" else "Waiting..."
-                    } else {
-                        "Not connected"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (isConnected) MaterialTheme.colorScheme.primary 
-                           else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            showTextDialog = true
-                        },
-                        enabled = isConnected,
-                        modifier = Modifier.height(32.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.secondary
-                        )
-                    ) {
-                        Text("Text", style = MaterialTheme.typography.bodySmall)
-                    }
-                    Button(
-                        onClick = {
-                            textPaths = emptyList()
-                            syncService.clearCanvas()
-                        },
-                        modifier = Modifier.height(32.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error
-                        ),
-                        enabled = isConnected
-                    ) {
-                        Text("Clear", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-        }
-        
-        // Student screen view - takes 95% of screen
-        BoxWithConstraints(modifier = Modifier.weight(1f)) {
+    Box(modifier = modifier.fillMaxSize()) {
+        // Student screen view - takes full screen
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val density = LocalDensity.current
             val boxWidth = constraints.maxWidth.toFloat()
             val boxHeight = constraints.maxHeight.toFloat()
@@ -190,6 +135,7 @@ fun TeacherScreen(
             
             // Invisible touch overlay - captures touches but doesn't render anything
             // Teacher sees drawings only on student's screen via screen sharing
+            // This overlay only captures drag gestures, not clicks, so FABs remain clickable
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -199,9 +145,11 @@ fun TeacherScreen(
                         var currentPath = androidx.compose.ui.graphics.Path()
                         var currentPoints = mutableListOf<Offset>()
                         var lastOffset: Offset? = null
+                        var isDragging = false
 
                         detectDragGestures(
                             onDragStart = { offset: Offset ->
+                                isDragging = true
                                 currentPath = androidx.compose.ui.graphics.Path()
                                 currentPoints = mutableListOf()
                                 currentPath.moveTo(offset.x, offset.y)
@@ -227,6 +175,7 @@ fun TeacherScreen(
                                 }
                             },
                             onDragEnd = {
+                                isDragging = false
                                 lastOffset?.let {
                                     currentPath.lineTo(it.x, it.y)
                                     if (currentPoints.isEmpty() || currentPoints.last() != it) {
@@ -267,25 +216,68 @@ fun TeacherScreen(
                     }
             )
             
-            // Draw text overlays on top (if needed in future)
-            textPaths.forEachIndexed { index, drawingPath ->
-                if (drawingPath.text.isNotEmpty()) {
-                    drawingPath.points.firstOrNull()?.let { pos ->
-                        // Convert canvas coordinates (pixels) to dp
-                        val xDp = (pos.x / density.density).dp
-                        val yDp = (pos.y / density.density).dp
-                        
-                        Text(
-                            text = drawingPath.text,
-                            style = TextStyle(
-                                fontSize = (drawingPath.strokeWidth * 1.2).sp,
-                                fontWeight = FontWeight.Bold,
-                                color = drawingPath.color
-                            ),
-                            modifier = Modifier.offset(x = xDp, y = yDp)
-                        )
+            // NO local rendering - teacher sees everything on student's screen via screen sharing
+        }
+        
+        // Status indicator at top
+        Surface(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 8.dp),
+            shape = MaterialTheme.shapes.small,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f),
+            shadowElevation = 2.dp
+        ) {
+            Text(
+                text = if (isConnected) {
+                    if (studentScreenBitmap != null) "✓ Viewing Student Screen" else "Waiting for screen..."
+                } else {
+                    "Not connected"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (isConnected) MaterialTheme.colorScheme.primary 
+                       else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            )
+        }
+        
+        // FAB buttons - positioned at bottom right, above touch overlay
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Clear button
+            FloatingActionButton(
+                onClick = {
+                    if (isConnected) {
+                        syncService.clearCanvas()
                     }
-                }
+                },
+                modifier = Modifier.alpha(if (isConnected) 1f else 0.5f),
+                containerColor = MaterialTheme.colorScheme.error
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Clear,
+                    contentDescription = "Clear Canvas"
+                )
+            }
+            
+            // Text button
+            FloatingActionButton(
+                onClick = {
+                    if (isConnected) {
+                        showTextDialog = true
+                    }
+                },
+                modifier = Modifier.alpha(if (isConnected) 1f else 0.5f),
+                containerColor = MaterialTheme.colorScheme.secondary
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Add Text"
+                )
             }
         }
     }
@@ -313,26 +305,28 @@ fun TeacherScreen(
                 Button(
                     onClick = {
                         if (textInput.isNotBlank()) {
-                            // Use center of screen as default position
-                            val pos = textPosition ?: Offset(
+                            // Use center of student screen for text position
+                            // Transform teacher screen coordinates to student screen coordinates
+                            val teacherPos = textPosition ?: Offset(
                                 screenWidth / 2,
                                 screenHeight / 2
                             )
-                            android.util.Log.d("TeacherScreen", "Adding text '${textInput}' at position ($pos)")
-                            val textPath = DrawingPath(
-                                path = androidx.compose.ui.graphics.Path(),
-                                points = listOf(pos),
-                                color = androidx.compose.ui.graphics.Color.Black,
-                                strokeWidth = 20f,
-                                text = textInput
-                            )
-                            textPaths = textPaths + textPath
+                            
+                            // Calculate student screen center position
+                            // The student screen is displayed in the BoxWithConstraints, so we need to
+                            // use the student screen dimensions directly
+                            val studentX = if (studentScreenWidth > 0) studentScreenWidth / 2 else teacherPos.x
+                            val studentY = if (studentScreenHeight > 0) studentScreenHeight / 2 else teacherPos.y
+                            
+                            android.util.Log.d("TeacherScreen", "Adding text '${textInput}' at student position ($studentX, $studentY)")
+                            
                             val pathData = DrawingPathData(
-                                points = listOf(PointData(pos.x, pos.y)),
+                                points = listOf(PointData(studentX, studentY)),
                                 color = "#000000",
                                 strokeWidth = 20f,
                                 text = textInput
                             )
+                            
                             android.util.Log.d("TeacherScreen", "Sending text path: text='${pathData.text}', pos=(${pathData.points.firstOrNull()})")
                             syncService.sendDrawingPath(pathData)
                         }
