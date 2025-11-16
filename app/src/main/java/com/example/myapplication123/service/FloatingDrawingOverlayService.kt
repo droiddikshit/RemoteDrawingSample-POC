@@ -197,6 +197,16 @@ class FloatingDrawingOverlayService : Service() {
             isAntiAlias = true
         }
         
+        // Paint for text rendering
+        private val textPaint = Paint().apply {
+            color = Color.BLACK
+            textSize = 48f // Default text size, will be scaled based on strokeWidth
+            style = Paint.Style.FILL
+            isAntiAlias = true
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) // More bold
+            isFakeBoldText = true // Add fake bold for extra thickness
+        }
+        
         // Make view non-interactive - all touches pass through
         override fun onTouchEvent(event: MotionEvent?): Boolean {
             // Return false to let touches pass through to underlying apps
@@ -221,10 +231,28 @@ class FloatingDrawingOverlayService : Service() {
                 if (pathData.color == "#CLEAR") return@forEach
                 
                 try {
-                    paint.color = Color.parseColor(pathData.color)
-                    paint.strokeWidth = pathData.strokeWidth
-                    
-                    if (pathData.points.isNotEmpty()) {
+                    // Check if this is a text path
+                    if (pathData.text.isNotEmpty() && pathData.points.isNotEmpty()) {
+                        // Draw text without background
+                        val pos = pathData.points[0]
+                        
+                        // Set text properties
+                        textPaint.color = Color.parseColor(pathData.color)
+                        textPaint.textSize = pathData.strokeWidth * 2.5f // Increased size multiplier (was 1.2f)
+                        
+                        // Get text metrics for proper baseline positioning
+                        val textMetrics = textPaint.fontMetrics
+                        val textBaseline = pos.y - textMetrics.top // Position baseline so text top aligns with pos.y
+                        
+                        // Draw text at baseline (no background)
+                        canvas.drawText(pathData.text, pos.x, textBaseline, textPaint)
+                        
+                        Log.d("DrawingOverlay", "Drew text '${pathData.text}' at (${pos.x}, ${pos.y}), baseline: $textBaseline")
+                    } else if (pathData.points.isNotEmpty()) {
+                        // Draw path (normal drawing)
+                        paint.color = Color.parseColor(pathData.color)
+                        paint.strokeWidth = pathData.strokeWidth
+                        
                         val path = android.graphics.Path()
                         val first = pathData.points[0]
                         path.moveTo(first.x, first.y)
@@ -250,7 +278,7 @@ class FloatingDrawingOverlayService : Service() {
                         canvas.drawPath(path, paint)
                     }
                 } catch (e: Exception) {
-                    Log.e("DrawingOverlay", "Error drawing path: ${e.message}")
+                    Log.e("DrawingOverlay", "Error drawing path: ${e.message}", e)
                 }
             }
         }

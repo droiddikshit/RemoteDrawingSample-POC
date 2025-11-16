@@ -253,6 +253,12 @@ class DrawingSyncService {
     }
     
     private fun transformCoordinatesToStudent(path: DrawingPathData): DrawingPathData {
+        // Skip transformation for text paths - they already have student coordinates
+        if (path.text.isNotEmpty()) {
+            Log.d("DrawingSync", "Skipping transformation for text path: '${path.text}'")
+            return path
+        }
+        
         if (studentScreenWidth == 0f || studentScreenHeight == 0f || teacherScreenWidth == 0f || teacherScreenHeight == 0f) {
             return path // No transformation if dimensions not set
         }
@@ -295,7 +301,7 @@ class DrawingSyncService {
                         when (obj) {
                             is DrawingPathData -> {
                                 val path = obj
-                                Log.d("DrawingSync", "Received path with ${path.points.size} points, color: ${path.color}")
+                                Log.d("DrawingSync", "Received path with ${path.points.size} points, color: ${path.color}, text: '${path.text}'")
                                 if (path.color == "#CLEAR") {
                                     // Clear command
                                     Log.d("DrawingSync", "Received clear command")
@@ -306,7 +312,7 @@ class DrawingSyncService {
                                     allPaths.add(path)
                                     // Update immediately - no delay
                                     _receivedPaths.value = allPaths.toList()
-                                    Log.d("DrawingSync", "Total paths now: ${allPaths.size}, text: ${path.text}")
+                                    Log.d("DrawingSync", "Total paths now: ${allPaths.size}, text: '${path.text}', all texts: ${allPaths.map { "'${it.text}'" }}")
                                 }
                             }
                             is ScreenFrameData -> {

@@ -23,13 +23,14 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.TextStyle
 import com.example.myapplication123.service.DrawingPathData
 import com.example.myapplication123.service.DrawingSyncService
 import com.example.myapplication123.service.FloatingDrawingOverlayService
 import com.example.myapplication123.service.ScreenSharingService
+import androidx.compose.ui.text.TextStyle
 
 @Composable
 fun StudentScreen(
@@ -76,13 +77,10 @@ fun StudentScreen(
         }
     }
     
-    // Convert received paths - update immediately when receivedPaths changes
-    // Use size and last item to detect changes properly
-    val pathsSize = receivedPaths.size
-    val lastPathText = receivedPaths.lastOrNull()?.text ?: ""
-    
-    val paths = remember(pathsSize, lastPathText) {
-        android.util.Log.d("StudentScreen", "Converting ${receivedPaths.size} paths, last text: '$lastPathText', all texts: ${receivedPaths.map { "'${it.text}'" }}")
+    // Convert received paths - compute directly since receivedPaths is already a StateFlow
+    // This will recompose whenever receivedPaths changes
+    val paths = remember(receivedPaths.size, receivedPaths.map { it.text }.joinToString()) {
+        android.util.Log.d("StudentScreen", "Converting ${receivedPaths.size} paths, all texts: ${receivedPaths.map { "'${it.text}'" }}")
         receivedPaths.map { pathData ->
             try {
                 DrawingPath(
@@ -229,24 +227,44 @@ fun StudentScreen(
             )
             
             // Draw text overlays on top - use absolute positioning
-            paths.forEachIndexed { index, drawingPath ->
-                if (drawingPath.text.isNotEmpty()) {
-                    drawingPath.points.firstOrNull()?.let { pos ->
-                        // Convert canvas coordinates (pixels) to dp
-                        val xDp = (pos.x / density.density).dp
-                        val yDp = (pos.y / density.density).dp
-                        
-                        android.util.Log.d("StudentScreen", "Drawing text '${drawingPath.text}' at ($xDp, $yDp), color: ${drawingPath.color}")
-                        
-                        Text(
-                            text = drawingPath.text,
-                            style = TextStyle(
-                                fontSize = (drawingPath.strokeWidth * 1.2).sp,
-                                fontWeight = FontWeight.Bold,
-                                color = drawingPath.color
-                            ),
-                            modifier = Modifier.offset(x = xDp, y = yDp)
-                        )
+            // Get actual box dimensions for proper coordinate scaling
+            val boxWidth = constraints.maxWidth.toFloat()
+            val boxHeight = constraints.maxHeight.toFloat()
+            
+            // Wrap in a Box that fills the parent to enable absolute positioning
+            Box(modifier = Modifier.fillMaxSize().zIndex(1000f)) {
+                paths.forEachIndexed { index, drawingPath ->
+                    if (drawingPath.text.isNotEmpty()) {
+                        val pos = drawingPath.points.firstOrNull()
+                        if (pos != null) {
+                            // Scale coordinates from student screen pixels to actual box size
+                            // Use actual student screen dimensions (screenWidth, screenHeight)
+                            val scaleX = boxWidth / screenWidth
+                            val scaleY = boxHeight / screenHeight
+                            
+                            val scaledX = pos.x * scaleX
+                            val scaledY = pos.y * scaleY
+                            
+                            android.util.Log.d("StudentScreen", "Rendering text '${drawingPath.text}' at pixels: ($scaledX, $scaledY) [original: (${pos.x}, ${pos.y})], fontSize: ${drawingPath.strokeWidth * 2.5}sp, box: ${boxWidth}x${boxHeight}, screen: ${screenWidth}x${screenHeight}")
+                            
+                            // Position text absolutely - use Box with offset (no background)
+                            Text(
+                                text = drawingPath.text,
+                                style = TextStyle(
+                                    fontSize = (drawingPath.strokeWidth * 2.5).sp, // Increased size multiplier
+                                    fontWeight = FontWeight.ExtraBold, // More bold
+                                    color = drawingPath.color
+                                ),
+                                modifier = Modifier
+                                    .offset(
+                                        x = (scaledX / density.density).dp,
+                                        y = (scaledY / density.density).dp
+                                    )
+                                    .zIndex(1000f + index) // Ensure text is on top
+                            )
+                        } else {
+                            android.util.Log.w("StudentScreen", "Text path '${drawingPath.text}' has no points!")
+                        }
                     }
                 }
             }

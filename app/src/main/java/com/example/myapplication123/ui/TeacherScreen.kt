@@ -315,10 +315,13 @@ fun TeacherScreen(
                             // Calculate student screen center position
                             // The student screen is displayed in the BoxWithConstraints, so we need to
                             // use the student screen dimensions directly
-                            val studentX = if (studentScreenWidth > 0) studentScreenWidth / 2 else teacherPos.x
-                            val studentY = if (studentScreenHeight > 0) studentScreenHeight / 2 else teacherPos.y
+                            // studentScreenWidth/Height are initialized to 1080x1920, so they're always > 0
+                            // They get updated when the first screen frame is received
+                            val studentX = studentScreenWidth / 2
+                            val studentY = studentScreenHeight / 2
                             
                             android.util.Log.d("TeacherScreen", "Adding text '${textInput}' at student position ($studentX, $studentY)")
+                            android.util.Log.d("TeacherScreen", "Student screen dimensions: ${studentScreenWidth}x${studentScreenHeight}")
                             
                             val pathData = DrawingPathData(
                                 points = listOf(PointData(studentX, studentY)),
@@ -327,7 +330,7 @@ fun TeacherScreen(
                                 text = textInput
                             )
                             
-                            android.util.Log.d("TeacherScreen", "Sending text path: text='${pathData.text}', pos=(${pathData.points.firstOrNull()})")
+                            android.util.Log.d("TeacherScreen", "Sending text path: text='${pathData.text}', points=${pathData.points.size}, pos=(${pathData.points.firstOrNull()?.x}, ${pathData.points.firstOrNull()?.y})")
                             syncService.sendDrawingPath(pathData)
                         }
                         showTextDialog = false
