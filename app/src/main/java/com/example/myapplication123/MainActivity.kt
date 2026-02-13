@@ -194,3 +194,19 @@ fun DrawingApp(
         }
     }
 }
+
+
+//TODO
+fun openInBrave(context: Context, url: String) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+        setPackage("com.brave.browser")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    try {
+        context.startActivity(intent)
+    } catch (e: ActivityNotFoundException) {
+        // Brave not installed
+        Toast.makeText(context, "Brave not installed", Toast.LENGTH_SHORT).show()
+    }
+}
