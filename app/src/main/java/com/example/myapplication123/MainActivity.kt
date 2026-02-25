@@ -210,3 +210,25 @@ fun openInBrave(context: Context, url: String) {
         Toast.makeText(context, "Brave not installed", Toast.LENGTH_SHORT).show()
     }
 }
+
+
+
+
+
+
+I want to update my classroom card list screen to use a responsive grid layout 
+that adapts based on screen width, similar to a gallery. Here are the exact requirements:
+
+BREAKPOINTS:
+- Screen width < 750dp  → show 2 cards per row
+- Screen width 750–1279dp → show 3 cards per row  
+- Screen width ≥ 1280dp → show 5 cards per row (tablet landscape)
+
+LAYOUT BEHAVIOR:
+- Cards must use Modifier.fillMaxWidth() so they grow/shrink with the grid cell
+- Cards must use aspectRatio(1f) OR a fixed height that scales well — ask me which I prefer
+- Outer edge padding: 12.dp on all sides
+- Gap between cards (horizontal and vertical): 8.dp
+- Layout must not break when resizing in freeform/popup window mode on Android tablets
+
+
